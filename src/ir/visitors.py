@@ -253,6 +253,69 @@ class DefaultVisitorUpdate(DefaultVisitor):
         children = node.children()
         new_children = []
         for c in children:
+            if c is None:
+                new_children.append(None)
+                continue
             new_children.append(c.accept(self))
         node.update_children(new_children)
         return node
+
+
+class FunctionDeclarationRemover(DefaultVisitorUpdate):
+    def __init__(self):
+        self.inside_inline_func = False
+        self.removed_functions = []
+
+    def result(self):
+        return None
+
+    def visit_func_decl(self, node):
+        old_inside_inline_func = self.inside_inline_func
+        if node.is_inline:
+            self.inside_inline_func = True
+            self.removed_functions.append(set())
+
+        res = super().visit_func_decl(node)
+
+        if node.is_inline:
+            self.removed_functions.pop()
+        self.inside_inline_func = old_inside_inline_func
+        return res
+
+    def visit_block(self, node):
+        if self.inside_inline_func:
+
+            current_removed = self.removed_functions[-1]
+            for stmt in node.body:
+                if isinstance(stmt, ast.FunctionDeclaration) and not stmt.is_inline:
+                    current_removed.add(stmt.name)
+
+            new_body = []
+            for stmt in node.body:
+                if isinstance(stmt, ast.FunctionDeclaration):
+                    if not stmt.is_inline:
+                        continue
+
+                if isinstance(stmt, ast.FunctionCall) and stmt.func in current_removed:
+                    continue
+                
+                visited_stmt = stmt.accept(self)
+                if visited_stmt is not None:
+                    new_body.append(visited_stmt)
+            node.body = new_body
+            return node
+        return super().visit_block(node)
+
+    def visit_func_call(self, node):
+        if self.inside_inline_func:
+            current_removed = self.removed_functions[-1]
+            if node.func in current_removed:
+                return None
+        return super().visit_func_call(node)
+
+    def visit_func_ref(self, node):
+        if self.inside_inline_func:
+            current_removed = self.removed_functions[-1]
+            if node.func in current_removed:
+                return None
+        return super().visit_func_ref(node)

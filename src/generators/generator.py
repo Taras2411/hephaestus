@@ -28,7 +28,7 @@ from src import utils as ut
 from src.generators import generators as gens
 from src.generators import utils as gu
 from src.generators.config import cfg
-from src.ir import ast, types as tp, type_utils as tu, kotlin_types as kt
+from src.ir import ast, types as tp, type_utils as tu, kotlin_types as kt, visitors
 from src.ir.context import Context
 from src.ir.builtins import BuiltinFactory
 from src.ir import BUILTIN_FACTORIES
@@ -96,7 +96,9 @@ class Generator():
                                  cfg.limits.max_top_level):
             self.gen_top_level_declaration()
         self.generate_main_func()
-        return ast.Program(self.context, self.language)
+        program = ast.Program(self.context, self.language)
+        program.accept(visitors.FunctionDeclarationRemover())
+        return program
 
     def gen_top_level_declaration(self):
         """Generate a top-level declaration and add it in the context.

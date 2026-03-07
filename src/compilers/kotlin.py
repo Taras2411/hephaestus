@@ -3,7 +3,7 @@ import re
 from src.compilers.base import BaseCompiler
 
 # Native compilers
-compiler = '$HOME/kotlin/kotlin-native/dist/bin/konanc'
+compiler = '/home/chelpc/1work/kotlin/kotlin-native/dist/bin/konanc'
 # compiler = '$HOME/.konan/kotlin-native-prebuilt-macos-aarch64-/bin/konanc'
 
 # JS compiler
