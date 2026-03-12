@@ -382,7 +382,8 @@ class FunctionDeclaration(Declaration):
                  is_final=True,
                  is_inline=False,
                  override=False,
-                 type_parameters=[]):
+                 type_parameters=[],
+                 inline_index: int = -1):
         self.name = name
         self.params = params
         self.ret_type = ret_type
@@ -392,6 +393,7 @@ class FunctionDeclaration(Declaration):
         self.is_inline = is_inline
         self.override = override
         self.type_parameters = type_parameters
+        self.inline_index = inline_index
         self.inferred_type = (
             self.ret_type if inferred_type is None else inferred_type)
         assert self.inferred_type, ("The inferred_type of a function must"
@@ -465,7 +467,8 @@ class FunctionDeclaration(Declaration):
                     check_list_eq(self.params, other.params) and
                     check_list_eq(self.type_parameters,
                                   other.type_parameters) and
-                    self.inferred_type == other.inferred_type)
+                    self.inferred_type == other.inferred_type and
+                    self.inline_index == other.inline_index)
         return False
 
 

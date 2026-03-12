@@ -84,6 +84,7 @@ class Generator():
         self.inline_functions: set = set()
 
         self._is_local_in_inlined: bool = False
+        self.inline_index_counter = 0
     ### Entry Point Generators ###
 
     def generate(self, context=None) -> ast.Program:
@@ -123,7 +124,6 @@ class Generator():
     def generate_main_func(self) -> ast.FunctionDeclaration:
         """Generate the main function.
         """
-
         initial_namespace = self.namespace
         self.namespace += ('main', )
         initial_depth = self.depth
@@ -134,7 +134,7 @@ class Generator():
             ret_type=self.bt_factory.get_void_type(),
             body=None,
             func_type=ast.FunctionDeclaration.FUNCTION)
-        self._add_node_to_parent(self.namespace, main_func)
+        self._add_node_to_parent(self.namespace[:-1], main_func)
         expr = self.generate_expr()
         decls = list(self.context.get_declarations(
             self.namespace, True).values())
@@ -198,7 +198,9 @@ class Generator():
                       is_interface=False,
                       inherits_param_with_default=False,
                       type_params:List[tp.TypeParameter]=None,
-                      namespace=None) -> ast.FunctionDeclaration:
+                      namespace=None,
+                      allow_inline = True,
+                      override=False) -> ast.FunctionDeclaration:
         """Generate a function declaration.
 
         This method is responsible for generating all types of function/methods,
@@ -216,6 +218,8 @@ class Generator():
             inherits_param_with_default: function inherits parameter with a default value.
             type_params: list of type parameters for parameterized function.
             namespace: set explicit namespace.
+            allow_inline: if False, generation of inline function is prohibited
+            override: add override modifier to the generated declaration
 
         Returns:
             A function declaration node.
@@ -246,7 +250,7 @@ class Generator():
         is_inline = (not abstract and
                      not nested_function and
                      not (class_method and not class_is_final) and
-                     not inherits_param_with_default)
+                     not inherits_param_with_default and allow_inline)
 
         prev_inside_java_lamdba = self._inside_java_lambda
         self._inside_java_lambda = nested_function and self.language == "java"
@@ -309,7 +313,13 @@ class Generator():
             is_inline=is_inline,
             inferred_type=None,
             type_parameters=type_params,
+            inline_index=(self.inline_index_counter
+                          if is_inline else -1),
+            override=override
         )
+        if func.is_inline:
+            self.inline_index_counter += 1
+
         self._add_node_to_parent(self.namespace[:-1], func)
         for p in params:
             self.context.add_var(self.namespace, p.name, p)
@@ -372,7 +382,8 @@ class Generator():
                        not_void: bool=False,
                        type_params: List[tp.TypeParameter]=None,
                        class_name: str=None,
-                       signature: tp.ParameterizedType=None
+                       signature: tp.ParameterizedType=None,
+                       allow_inline: bool=True
                        ) -> ast.ClassDeclaration:
         """Generate a class declaration.
 
@@ -386,6 +397,7 @@ class Generator():
             type_params: List with type parameters.
             class_name: Class name.
             signature: Generate at least one function with the given signature.
+            allow_inline:  if False, generation of inline function is prohibited
 
         Returns:
             A class declaration node.
@@ -419,9 +431,10 @@ class Generator():
             cls.supertypes = [c.class_type for c in cls.superclasses]
         if not cls.is_interface():
             self.gen_class_fields(cls, super_cls_info, field_type)
-
+        if cls.class_type == ast.ClassDeclaration.INTERFACE:
+            allow_inline = False
         self.gen_class_functions(cls, super_cls_info,
-                                 not_void, fret_type, signature)
+                                 not_void, fret_type, signature, allow_inline = allow_inline)
         self._blacklisted_classes.remove(class_name)
         self.namespace = initial_namespace
         self.depth = initial_depth
@@ -579,7 +592,8 @@ class Generator():
                             curr_cls, super_cls_info,
                             not_void=False,
                             fret_type=None,
-                            signature: tp.ParameterizedType=None
+                            signature: tp.ParameterizedType=None,
+                            allow_inline: bool=True
                             ) -> List[ast.FunctionDeclaration]:
         """Generate methods for a class.
 
@@ -593,6 +607,7 @@ class Generator():
             not_void: Do not create methods that return void.
             fret_type: At least one method will return this type.
             signature: Generate at least one function with the given signature.
+            allow_inline:  if False, generation of inline function is prohibited
         """
         funcs = []
         max_funcs = cfg.limits.cls.max_funcs - 1 if fret_type \
@@ -604,21 +619,24 @@ class Generator():
                 self.gen_func_decl(fret_type, not_void=not_void,
                                    class_is_final=curr_cls.is_final,
                                    abstract=abstract,
-                                   is_interface=curr_cls.is_interface()))
+                                   is_interface=curr_cls.is_interface(),
+                                   allow_inline = allow_inline))
         if signature:
             ret_type, params = self._gen_ret_and_paramas_from_sig(signature)
             funcs.append(
                 self.gen_func_decl(ret_type, params=params, not_void=not_void,
                                    class_is_final=curr_cls.is_final,
                                    abstract=abstract,
-                                   is_interface=curr_cls.is_interface()))
+                                   is_interface=curr_cls.is_interface(),
+                                   allow_inline = allow_inline))
         if not super_cls_info:
             for _ in range(ut.random.integer(0, max_funcs)):
                 funcs.append(
                     self.gen_func_decl(not_void=not_void,
                                        class_is_final=curr_cls.is_final,
                                        abstract=abstract,
-                                       is_interface=curr_cls.is_interface()))
+                                       is_interface=curr_cls.is_interface(),
+                                       allow_inline = allow_inline))
         else:
             abstract_funcs = []
             class_decls = self.context.get_classes(self.namespace).values()
@@ -663,7 +681,8 @@ class Generator():
                     self.gen_func_decl(not_void=not_void,
                                        class_is_final=curr_cls.is_final,
                                        abstract=abstract,
-                                       is_interface=curr_cls.is_interface()))
+                                       is_interface=curr_cls.is_interface(),
+                                       allow_inline = allow_inline))
         return funcs
 
 
@@ -722,10 +741,12 @@ class Generator():
                                       params=params,
                                       is_interface=is_interface,
                                       inherits_param_with_default=inherits_param_with_default,
-                                      type_params=type_params)
+                                      type_params=type_params,
+                                      override=True)
         if func.body is None:
             new_func.is_final = False
-        new_func.override = True
+        if new_func.is_inline:
+            new_func.is_final = True
         return new_func
 
     # Where
@@ -1517,34 +1538,81 @@ class Generator():
         """
         log(self.logger, "Generating function call of type {}".format(etype))
         funcs = self._get_matching_function_declarations(etype, subtype)
+        log(self.logger, "Found {} matching functions: {}".format(len(funcs), [vars(decl.attr_decl) for decl in funcs]))
 
         initial_namespace = self.namespace
         rand_func = None
         func = None
-        while not func and funcs:
+
+        current_func = self.context.get_decl(self.namespace[:-1], self.namespace[-1])
+        current_func_is_inline = isinstance(current_func, ast.FunctionDeclaration) and current_func.is_inline
+        non_recursive_funcs = []
+
+        if current_func_is_inline:
+            log(self.logger, "Current caller function is inline with index {} and name {}".format(current_func.inline_index,
+                                                                                        current_func.name))
+            for f in funcs:
+                if isinstance(f.attr_decl, ast.FunctionDeclaration):
+                    if str(f.attr_decl.name) == str(current_func.name):
+                        continue
+                    if f.attr_decl.is_inline:
+                        if f.attr_decl.inline_index >= current_func.inline_index:
+                            continue
+                non_recursive_funcs.append(f)
+            funcs[:] = non_recursive_funcs
+            log(self.logger, "Filtered non-recursive matching functions : {}".format([vars(decl.attr_decl) for decl in funcs]))
+
+        if funcs:
             rand_func = ut.random.choice(funcs)
             func = rand_func.attr_decl
 
-            # Check for recursive calls of inline functions
-            if isinstance(func, ast.FunctionDeclaration) and func.is_inline:
-                for cur_namespace in initial_namespace:
-                    if cur_namespace == func.name:
-                        funcs.remove(rand_func)
-                        func = None
+        # while not func and funcs:
+        #     rand_func = ut.random.choice(funcs)
+        #     func = rand_func.attr_decl
+        #
+        #     # Check for recursive calls of inline functions
+        #     if isinstance(func, ast.FunctionDeclaration) and func.is_inline:
+        #         for cur_namespace in initial_namespace:
+        #             if cur_namespace == func.name:
+        #                 funcs.remove(rand_func)
+        #                 func = None
+
         if not funcs:
             msg = "No compatible functions in the current scope for type {}"
             log(self.logger, msg.format(etype))
+            method_name_to_exclude = None
+            if current_func_is_inline and current_func.override:
+                log(self.logger, "Current caller function is overriding and inline")
+                method_name_to_exclude = current_func.name
+
             type_fun = (
                 None if rand_func is not None
                 else self._get_matching_class(etype, subtype=subtype,
-                                                attr_name='functions')
+                                              attr_name='functions',
+                                              exclude=method_name_to_exclude)
             )
+            type_fun_is_inline = (type_fun is not None
+                                  and isinstance(type_fun.attr_decl, ast.FunctionDeclaration)
+                                  and type_fun.attr_decl.is_inline)
+
+            if current_func_is_inline:
+                if type_fun_is_inline:
+                    log(self.logger, "Class {} found with matching method of inline index {}".format(type_fun.attr_decl,
+                                                                                         type_fun.attr_decl.inline_index))
+                    if type_fun.attr_decl.inline_index >= current_func.inline_index:
+                        type_fun = None
+
+
+
             if type_fun is None:
                 msg = "No compatible classes for type {}"
                 log(self.logger, msg.format(etype))
                 # Here, we generate a function or a class containing a function
                 # whose return type is 'etype'.
-                type_fun = self._gen_matching_func(etype, not_void=True)
+
+                #In case we are generating a new function to call it in body of inline function,
+                # generated function should not be inline to maintain topological order of calls
+                type_fun = self._gen_matching_func(etype, not_void=True, allow_inline= not current_func_is_inline)
             receiver = (
                 None if type_fun.receiver_t is None
                 else self.generate_expr(type_fun.receiver_t, only_leaves)
@@ -1560,7 +1628,7 @@ class Generator():
         params_map.update(func_type_map or {})
 
         msg = ("Selected callee method {}: type {}; receiver {}; "
-               "TypeVarMap {}".format(func.name, etype, receiver, params_map))
+               "TypeVarMap {} for caller {}".format(func.name, etype, receiver, params_map, current_func.name if current_func else "unavailable"))
         log(self.logger, msg)
         args = []
         initial_depth = self.depth
@@ -1597,6 +1665,10 @@ class Generator():
                 for t_param in func.type_parameters
             ]
         )
+        if current_func_is_inline and func.inline_index >= current_func.inline_index:
+            log(self.logger, "Inline index of callee function >= inline index of caller function. Raising exception")
+            raise Exception("Recursive call of inline function")
+
         return ast.FunctionCall(func.name, args, receiver,
                                 type_args=type_args)
 
@@ -2565,7 +2637,8 @@ class Generator():
     def _gen_matching_func(self,
                            etype: tp.Type,
                            not_void=False,
-                           signature=False
+                           signature=False,
+                           allow_inline = True
                            ) -> gu.AttrAccessInfo:
         """ Generate a function or a class containing a function whose return
         type is 'etype'.
@@ -2574,6 +2647,7 @@ class Generator():
             etype: the targeted return type.
             not_void: do not create functions that return void.
             signature: etype is a signature.
+            allow_inline:  if False, generation of inline function is prohibited
         """
         # Randomly choose to generate a function or a class method.
         gen_method = (
@@ -2605,7 +2679,7 @@ class Generator():
             params = None
             if signature:
                 etype, params = self._gen_ret_and_paramas_from_sig(etype)
-            func = self.gen_func_decl(etype, params=params, not_void=not_void)
+            func = self.gen_func_decl(etype, params=params, not_void=not_void, allow_inline = allow_inline)
             self.namespace = initial_namespace
             func_type_var_map = {}
             if func.is_parameterized():
@@ -2618,13 +2692,14 @@ class Generator():
             return gu.AttrAccessInfo(None, {}, func, func_type_var_map)
         # Generate a class containing the requested function
         return self._gen_matching_class(etype, 'functions',
-                                        signature=signature)
+                                        signature=signature, allow_inline = allow_inline)
 
     def _get_matching_class(self,
                             etype: tp.Type,
                             subtype: bool,
                             attr_name: str,
-                            signature=False) -> gu.AttrAccessInfo:
+                            exclude: str = None,
+                            signature=False,) -> gu.AttrAccessInfo:
         """Get a class that has an attribute of attr_name that is/return etype.
 
         This function essentially searches for a class that has either a field
@@ -2636,6 +2711,7 @@ class Generator():
             subtype: The type of matching attribute could be a subtype of
                 `etype`.
             attr_name: 'fields' or 'functions'
+            exclude: name of a function to exclude from search pull. No classes with this method will be returned
             signature: etype is a signature.
 
         Returns:
@@ -2646,8 +2722,16 @@ class Generator():
         log(self.logger, msg.format(attr_name, etype))
         class_decls = self._get_matching_class_decls(
             etype, subtype=subtype, attr_name=attr_name, signature=signature)
+        if exclude is not None:
+            filtered_class_decls = []
+            for class_decl in class_decls:
+                if isinstance(class_decl[2], ast.FunctionDeclaration) and class_decl[2].name != exclude:
+                    filtered_class_decls.append(class_decl)
+            class_decls[:] = filtered_class_decls
+            log(self.logger, "Available classes without excluded method: {}".format(class_decls))
         if not class_decls:
             return None
+
         cls, type_var_map, attr = ut.random.choice(class_decls)
         func_type_var_map = {}
         is_parameterized_func = isinstance(
@@ -2831,7 +2915,8 @@ class Generator():
                             etype: tp.Type,
                             attr_name: str,
                             not_void=False,
-                            signature=False) -> gu.AttrAccessInfo:
+                            signature=False,
+                            allow_inline = True) -> gu.AttrAccessInfo:
         """Generate a class that has an attribute of attr_name that is/return etype.
 
         Args:
@@ -2840,6 +2925,7 @@ class Generator():
             attr_name: 'fields' or 'functions'
             not_void: Functions of the class should not return void.
             signature: etype is a signature.
+            allow_inline:  if False, generation of inline function is prohibited
 
         Returns:
             An AttrAccessInfo for the generated class type and attribute
@@ -2872,7 +2958,7 @@ class Generator():
             kwargs = {'field_type': etype2}
         cls = self.gen_class_decl(**kwargs, not_void=not_void,
                                   type_params=type_params,
-                                  class_name=class_name)
+                                  class_name=class_name, allow_inline = allow_inline)
         self.namespace = initial_namespace
 
         # Get receiver
